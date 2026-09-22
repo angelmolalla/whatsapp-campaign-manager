@@ -1,4 +1,10 @@
 # Logs
+/.wwebjs_auth/
+/.wwebjs_cache/
+/qr.html
+/data/contacts.json
+/media/*
+!/media/.gitkeep
 logs
 *.log
 npm-debug.log*
