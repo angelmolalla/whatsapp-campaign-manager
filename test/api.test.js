@@ -157,6 +157,28 @@ test('protege endpoints con API key y permite consultar la sesión', async t => 
   assert.equal((await fetch(`${f.base}/api/session`, { headers: { 'x-api-key': 'test-secret' } })).status, 200);
 });
 
+test('solo GET del QR es público y conserva no-store', async t => {
+  const f = await fixture(t, { apiKey: 'test-secret', session: {
+    snapshot: async () => ({ status: 'qr', qrDataUrl: 'data:image/png;base64,dGVzdA==', error: null }),
+  } });
+  for (const path of ['/api/session/qr', '/api/session/qr?', '/api/session/qr/']) {
+    const response = await fetch(`${f.base}${path}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.match(await response.text(), /data:image\/png;base64,/);
+  }
+  for (const [path, method] of [['/api/session', 'GET'], ['/api/session', 'POST'], ['/api/session/qr', 'POST'], ['/api/session/qr/extra', 'GET'], ['/api/messages/bulk', 'POST']]) {
+    assert.equal((await fetch(`${f.base}${path}`, { method })).status, 401);
+  }
+});
+
+test('QR público sin QR pendiente devuelve 409', async t => {
+  const f = await fixture(t, { apiKey: 'test-secret' });
+  const response = await fetch(`${f.base}/api/session/qr`);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error.code, 'QR_NOT_AVAILABLE');
+});
+
 test('ciclo QR, autenticación, ready, desconexión y reconexión sin duplicar clientes', async () => {
   const clients = [];
   const session = new WhatsAppSession(() => {
@@ -253,6 +275,19 @@ test('contacts obligatorio y límites de contactos e imagen', async t => {
   assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: { originalname: 'lista.json', buffer: Buffer.alloc(1024 * 1024 + 1) } })).status, 413);
   assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: f.contactsFile, image: { originalname: 'large.png', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) } })).status, 413);
   assert.equal(f.calls.length, 0);
+});
+
+test('rechaza contacts vacío, espacios, BOM o lista vacía sin enviar mensajes', async t => {
+  const f = await fixture(t);
+  for (const content of ['', ' \r\n\t ', '\uFEFF', '\uFEFF \n', '[]', '[  ]']) {
+    const response = await f.post({ message: 'Hola' }, {}, {
+      contacts: { originalname: 'contacts.json', buffer: Buffer.from(content) },
+    });
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).error.code, 'EMPTY_CONTACTS_FILE');
+    assert.equal(f.calls.length, 0);
+  }
+  assert.equal((await f.post({ message: 'Hola' })).status, 200);
 });
 
 test('rechaza formato anterior y archivos extra o repetidos', async t => {

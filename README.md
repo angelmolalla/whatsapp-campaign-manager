@@ -78,7 +78,7 @@ En Railway:
 1. Selecciona el repositorio y la rama `main`; Railway debe construir el `Dockerfile` de la raíz.
 2. Define `API_KEY` con una clave larga y privada. El contenedor ya define `HOST=0.0.0.0` y `AUTH_DIR=/data/whatsapp`; la API respeta `PORT` proporcionado por el entorno.
 3. Adjunta un volumen al servicio con ruta de montaje `/data`, antes de vincular WhatsApp. Utiliza una sola réplica.
-4. Genera el dominio público en Settings → Networking. Añade `x-api-key` a todas las peticiones de Postman.
+4. Genera el dominio público en Settings → Networking. Añade `x-api-key` a las peticiones de Postman, excepto `GET /api/session/qr`, que es público.
 5. Consulta `GET /api/session`; en la primera vinculación espera `qr`, obtiene `GET /api/session/qr` y escanea la imagen. Tras vincular, espera `ready` y prueba con un solo contacto.
 
 No copies la ruta Windows de Chrome a Railway ni subas tu `.env`. En el contenedor se utiliza `/usr/bin/chromium`. Chromium se ejecuta con `PUPPETEER_NO_SANDBOX=true` para el entorno de contenedor sin privilegios de sandbox; esto desactiva el aislamiento propio del navegador. Esa opción no se activa por defecto al ejecutar Node localmente. La API exige autenticación al escuchar fuera de localhost.
@@ -91,7 +91,7 @@ El contenedor no necesita una base de datos. Los archivos multipart se procesan 
 | `PORT` | `3000` | Puerto HTTP |
 | `AUTH_DIR` | `./.wwebjs_auth` | Persistencia local de la sesión |
 | `MESSAGE_DELAY_MS` | `1500` | Pausa entre contactos; de 0 a 60000 ms |
-| `API_KEY` | vacío | Si se establece, exige `x-api-key` en todos los endpoints |
+| `API_KEY` | vacío | Si se establece, exige `x-api-key`, excepto en `GET /api/session/qr` |
 | `PUPPETEER_EXECUTABLE_PATH` | automático | Ruta opcional a Chrome |
 
 Las rutas de configuración relativas se resuelven desde la raíz del proyecto. Para escuchar fuera de localhost se exige `API_KEY`. Si publicas la API, utiliza HTTPS mediante un proxy. Los contactos, imágenes y credenciales de sesión están excluidos de Git.
@@ -145,10 +145,10 @@ http://127.0.0.1:3000/api/session/qr
 
 En el teléfono: **WhatsApp → Dispositivos vinculados → Vincular un dispositivo**. Escanea el QR y consulta el estado hasta que sea `ready`. Actualiza la página si el QR cambia. Si todavía no hay QR o la sesión ya está vinculada, la página devuelve `409 QR_NOT_AVAILABLE`.
 
-Si configuraste API key, envía el encabezado también al obtener la página:
+`GET /api/session/qr` no exige API key y se puede abrir directamente en el navegador. Cualquier persona que conozca la URL puede ver el QR pendiente. Las demás rutas mantienen la autenticación. También puedes guardar la página:
 
 ```bash
-curl -H "x-api-key: TU_CLAVE" http://127.0.0.1:3000/api/session/qr -o qr.html
+curl http://127.0.0.1:3000/api/session/qr -o qr.html
 ```
 
 Abre `qr.html` localmente y elimínalo al terminar. El QR y la carpeta de sesión son privados. `LocalAuth` guarda las credenciales en `AUTH_DIR/session-campaign-manager/` y las reutiliza automáticamente tras un reinicio. Durante la conexión verás `starting` o `authenticated`; solo se informa `ready` cuando WhatsApp confirma que está conectado. Con el servidor apagado la API no está disponible. Si la sesión se recupera sin QR, `QR_NOT_AVAILABLE` es normal y no hace falta abrir esa página. WhatsApp puede solicitar volver a vincular si revoca la sesión.
@@ -214,6 +214,8 @@ El POST espera a que termine la lista. `200` indica que todos los envíos fueron
 Solo se procesa una campaña a la vez por proceso. **Repetir el POST vuelve a enviar a toda la lista**: no hay idempotencia ni reanudación persistente. Si el cliente HTTP pierde la conexión, el proceso puede seguir enviando; no reintentes automáticamente. Configura el timeout del cliente/proxy según la cantidad de contactos y la pausa entre mensajes. Ejecuta una única instancia por carpeta de sesión.
 
 ## Errores HTTP
+
+En `POST /api/messages/bulk`, el archivo `contacts` es obligatorio en `multipart/form-data`. Si no se adjunta, responde `400 CONTACTS_FILE_REQUIRED`. Si tiene cero bytes, solo espacios o una lista `[]`, responde `422 EMPTY_CONTACTS_FILE`. Ninguno de estos casos envía mensajes. La sesión debe estar conectada; su validación se realiza primero.
 
 ### Compatibilidad de imágenes con WhatsApp Web
 

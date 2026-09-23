@@ -4,6 +4,7 @@ const { HttpError } = require('../errors/http-error');
 function apiKeyMiddleware(apiKey) {
   return (req, res, next) => {
     res.set('Cache-Control', 'no-store');
+    if (req.method === 'GET' && /^\/api\/session\/qr\/?$/.test(req.path)) return next();
     if (apiKey) {
       const supplied = Buffer.from(req.get('x-api-key') || '');
       const expected = Buffer.from(apiKey);
