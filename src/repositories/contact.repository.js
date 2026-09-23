@@ -1,11 +1,19 @@
-const fs = require('node:fs/promises');
 const { HttpError } = require('../errors/http-error');
 const { ContactDto } = require('../dto/contact.dto');
 
 async function readContacts(file) {
+  if (!file || !Buffer.isBuffer(file.buffer)) {
+    throw new HttpError(400, 'CONTACTS_FILE_REQUIRED', 'Adjunta el archivo JSON en el campo contacts.');
+  }
+  if (!file.originalname?.toLowerCase().endsWith('.json')) {
+    throw new HttpError(400, 'INVALID_CONTACTS_EXTENSION', 'El archivo contacts debe tener extensión .json.');
+  }
+  if (file.buffer.length > 1024 * 1024) {
+    throw new HttpError(413, 'UPLOAD_TOO_LARGE', 'El archivo de contactos admite máximo 1 MB.');
+  }
   let contacts;
   try {
-    contacts = JSON.parse((await fs.readFile(file, 'utf8')).replace(/^\uFEFF/, ''));
+    contacts = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(file.buffer).replace(/^\uFEFF/, ''));
   } catch {
     throw new HttpError(422, 'INVALID_CONTACTS_FILE', 'No se pudo leer el archivo de contactos como JSON.');
   }
@@ -20,12 +28,8 @@ async function readContacts(file) {
   return [...unique.values()];
 }
 class ContactRepository {
-  constructor(file) {
-    this.file = file;
-  }
-
-  async findAll() {
-    return readContacts(this.file);
+  async findAll(file) {
+    return readContacts(file);
   }
 }
 module.exports = { ContactRepository };

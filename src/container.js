@@ -6,8 +6,8 @@ const { createWhatsAppClient, createWhatsAppMedia } = require('./providers/whats
 
 function createContainer(config) {
   const session = new WhatsAppSession(() => createWhatsAppClient(config));
-  const contactRepository = new ContactRepository(config.contactsFile);
-  const mediaService = new MediaService(config.mediaDir, createWhatsAppMedia);
+  const contactRepository = new ContactRepository();
+  const mediaService = new MediaService(createWhatsAppMedia);
   const campaign = new CampaignService({ session, contactRepository, mediaService, delayMs: config.delayMs });
   return { session, campaign };
 }

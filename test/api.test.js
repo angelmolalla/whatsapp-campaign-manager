@@ -15,13 +15,13 @@ const { loadConfig } = require('../src/config/env');
 
 async function fixture(t, options = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'wa-campaign-test-'));
-  const config = { contactsFile: path.join(dir, 'contacts.json'), mediaDir: path.join(dir, 'media'), delayMs: 0 };
-  await fs.mkdir(config.mediaDir);
-  await fs.writeFile(config.contactsFile, JSON.stringify([
+  const config = { delayMs: 0 };
+
+  const contactsFile = { originalname: 'contacts.json', buffer: Buffer.from(JSON.stringify([
     { name: 'Uno', phone: '0990000000' },
     { name: 'Duplicado', phone: '+593990000000' },
     { name: 'Dos', phone: '593990000001' },
-  ]));
+  ])) };
   const calls = [];
   const session = {
     connect() {},
@@ -30,7 +30,7 @@ async function fixture(t, options = {}) {
     send: async (...args) => { calls.push(args); return { id: { _serialized: 'message-id' } }; },
     ...options.session,
   };
-  const campaign = new CampaignService({ session, contactRepository: new ContactRepository(config.contactsFile), mediaService: new MediaService(config.mediaDir, image => image), delayMs: config.delayMs });
+  const campaign = new CampaignService({ session, contactRepository: new ContactRepository(), mediaService: new MediaService(image => image), delayMs: config.delayMs });
   const server = createApp({ session, campaign, apiKey: options.apiKey }).listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
@@ -38,10 +38,15 @@ async function fixture(t, options = {}) {
     await fs.rm(dir, { recursive: true, force: true });
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const post = (body, headers = {}) => fetch(`${base}/api/messages/bulk`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
-  });
-  return { dir, config, session, campaign, base, post, calls };
+  const post = (body, headers = {}, files = { contacts: contactsFile }) => {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(body)) form.append(key, String(value));
+    for (const [key, file] of Object.entries(files)) {
+      if (file) form.append(key, new Blob([file.buffer]), file.originalname);
+    }
+    return fetch(`${base}/api/messages/bulk`, { method: 'POST', headers, body: form });
+  };
+  return { dir, config, session, campaign, base, post, calls, contactsFile };
 }
 
 test('envío HTTP sin imagen normaliza y elimina duplicados', async t => {
@@ -58,35 +63,36 @@ test('409 sin sesión antes de leer contactos o enviar', async t => {
   const f = await fixture(t, { session: { assertReady: async () => {
     throw new HttpError(409, 'SESSION_NOT_CONNECTED', 'Conecta WhatsApp.');
   } } });
-  await fs.unlink(f.config.contactsFile);
+  f.contactsFile.buffer = Buffer.from('invalid JSON');
   const response = await f.post({ message: 'Hola' });
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error.code, 'SESSION_NOT_CONNECTED');
   assert.equal(f.calls.length, 0);
 });
 
-test('imagen opcional se carga y se envía con el mensaje', async t => {
+test('imagen adjunta se envía con el mensaje y sin escribir archivos', async t => {
   const f = await fixture(t);
-  await fs.writeFile(path.join(f.config.mediaDir, 'foto.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nWQAAAAASUVORK5CYII=', 'base64'));
-  const response = await f.post({ message: 'Nuestra noticia', imagePath: 'foto.png' });
+  const image = { originalname: 'foto.png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nWQAAAAASUVORK5CYII=', 'base64') };
+  const response = await f.post({ message: 'Nuestra noticia' }, {}, { contacts: f.contactsFile, image });
   assert.equal(response.status, 200);
   assert.equal(f.calls[0][1], 'Nuestra noticia');
   assert.equal(f.calls[0][2].mimetype, 'image/png');
+  assert.equal(f.calls[0][2].data, image.buffer.toString('base64'));
+  assert.deepEqual(await fs.readdir(f.dir), []);
 });
 
-test('imagen inválida, ausente y rutas fuera de media no envían mensajes', async t => {
+test('imagen inválida o vacía y antiguo imagePath rechazan el lote', async t => {
   const f = await fixture(t);
-  await fs.writeFile(path.join(f.config.mediaDir, 'fake.png'), 'no es una imagen');
-  for (const imagePath of ['fake.png', 'missing.png', '../contacts.json', '', null]) {
-    assert.equal((await f.post({ message: 'Hola', imagePath })).status, 400);
+  for (const buffer of [Buffer.from('no es imagen'), Buffer.alloc(0)]) {
+    assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: f.contactsFile, image: { originalname: 'fake.png', buffer } })).status, 400);
   }
+  assert.equal((await f.post({ message: 'Hola', imagePath: 'foto.png' })).status, 400);
   assert.equal(f.calls.length, 0);
 });
-
 test('valida toda la lista antes de iniciar el envío', async t => {
   const f = await fixture(t);
   for (const content of ['{', '[]', '{}', '[{"phone":"593990000000"},{"phone":"mal"}]']) {
-    await fs.writeFile(f.config.contactsFile, content);
+    f.contactsFile.buffer = Buffer.from(content);
     assert.equal((await f.post({ message: 'Hola' })).status, 422);
   }
   assert.equal(f.calls.length, 0);
@@ -94,7 +100,7 @@ test('valida toda la lista antes de iniciar el envío', async t => {
 
 test('400 para mensajes vacíos y JSON mal formado', async t => {
   const f = await fixture(t);
-  for (const body of [{}, { message: ' ' }, { message: 123 }, { message: 'x'.repeat(4097) }]) {
+  for (const body of [{}, { message: ' ' }, { message: 'x'.repeat(4097) }]) {
     assert.equal((await f.post(body)).status, 400);
   }
   const response = await fetch(`${f.base}/api/messages/bulk`, {
@@ -136,7 +142,7 @@ test('rechaza campañas simultáneas y libera el bloqueo al terminar', async t =
   const gate = new Promise(resolve => { release = resolve; });
   const entered = new Promise(resolve => { started = resolve; });
   const f = await fixture(t, { session: { send: async () => { started(); await gate; } } });
-  const first = f.campaign.send({ message: 'Uno' });
+  const first = f.campaign.send({ message: 'Uno' }, { contacts: f.contactsFile });
   await entered;
   await assert.rejects(f.campaign.send({ message: 'Dos' }), { code: 'CAMPAIGN_IN_PROGRESS' });
   release();
@@ -236,4 +242,80 @@ test('adaptador WhatsApp envía texto o imagen con caption y rechaza números no
     ['593990000000@c.us', media, { caption: 'Noticia' }],
   ]);
   await assert.rejects(session.send('593990000001', 'Hola', null), { code: 'NUMBER_NOT_REGISTERED' });
+});
+
+test('contacts obligatorio y límites de contactos e imagen', async t => {
+  const f = await fixture(t);
+  const response = await f.post({ message: 'Hola' }, {}, {});
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error.code, 'CONTACTS_FILE_REQUIRED');
+  assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: { originalname: 'lista.txt', buffer: f.contactsFile.buffer } })).status, 400);
+  assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: { originalname: 'lista.json', buffer: Buffer.alloc(1024 * 1024 + 1) } })).status, 413);
+  assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: f.contactsFile, image: { originalname: 'large.png', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) } })).status, 413);
+  assert.equal(f.calls.length, 0);
+});
+
+test('rechaza formato anterior y archivos extra o repetidos', async t => {
+  const f = await fixture(t);
+  assert.equal((await fetch(`${f.base}/api/messages/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"Hola"}' })).status, 415);
+  assert.equal((await fetch(`${f.base}/api/messages/bulk`, { method: 'POST', headers: { 'Content-Type': 'multipart/form-data' }, body: 'invalid' })).status, 400);
+  for (const names of [['other'], ['contacts', 'contacts'], ['image', 'image']]) {
+    const form = new FormData();
+    form.append('message', 'Hola');
+    for (const name of names) form.append(name, new Blob([f.contactsFile.buffer]), 'contacts.json');
+    assert.equal((await fetch(`${f.base}/api/messages/bulk`, { method: 'POST', body: form })).status, 400);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('cada campaña utiliza sus contactos adjuntos, admite BOM y no persiste archivos', async t => {
+  const f = await fixture(t);
+  await f.post({ message: 'Uno' });
+  const contacts = { originalname: 'otra-lista.json', buffer: Buffer.from('\uFEFF[{"phone":"593990000002"}]') };
+  const result = await f.post({ message: 'Dos' }, {}, { contacts });
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).total, 1);
+  assert.equal(f.calls[2][0], '593990000002');
+  assert.deepEqual(await fs.readdir(f.dir), []);
+});
+
+test('rechaza UTF-8 inválido y más de 1000 contactos antes de enviar', async t => {
+  const f = await fixture(t);
+  for (const buffer of [Buffer.from([0xff]), Buffer.from(JSON.stringify(Array(1001).fill({ phone: '593990000000' })))]) {
+    assert.equal((await f.post({ message: 'Hola' }, {}, { contacts: { originalname: 'lista.json', buffer } })).status, 422);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('fallos de imagen incluyen detalle y log correlacionado sin datos del mensaje', async t => {
+  const f = await fixture(t, { session: { send: async () => {
+    const error = new Error('Media upload failed for 593990000000: mensaje privado');
+    error.sendStage = 'send_image';
+    throw error;
+  } } });
+  const logs = [];
+  f.campaign.logger = { error: (...args) => logs.push(args) };
+  const image = { originalname: 'foto.png', buffer: Buffer.from('89504e470d0a1a0a', 'hex') };
+  const response = await f.post({ message: 'mensaje privado' }, {}, { contacts: f.contactsFile, image });
+  assert.equal(response.status, 207);
+  const result = await response.json();
+  assert.equal(result.failed, 2);
+  assert.match(result.results[0].detail, /Media upload failed/);
+  assert.equal(logs[0][1].campaignId, result.campaignId);
+  assert.equal(logs[0][1].stage, 'send_image');
+  assert.equal(logs[0][1].mediaType, 'image/png');
+  assert.doesNotMatch(JSON.stringify(logs), /593990000000|mensaje privado|foto.png/);
+});
+
+test('adaptador conserva la causa y distingue resolución de destinatario de envío', async () => {
+  const session = new WhatsAppSession(() => {});
+  session.client = {
+    getNumberId: async () => ({ _serialized: 'test@c.us' }),
+    sendMessage: async () => { throw new Error('Data passed to getter must include an id property'); },
+  };
+  await assert.rejects(session.send('test', 'Hola', { mimetype: 'image/jpeg' }), {
+    sendStage: 'send_image', message: 'Data passed to getter must include an id property',
+  });
+  session.client.getNumberId = async () => { throw new Error('lookup failed'); };
+  await assert.rejects(session.send('test', 'Hola', null), { sendStage: 'resolve_recipient' });
 });

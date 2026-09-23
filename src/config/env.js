@@ -19,10 +19,9 @@ function loadConfig(env = process.env) {
     host, apiKey,
     port: integer(env.PORT, 3000, 1, 65535, 'PORT'),
     delayMs: integer(env.MESSAGE_DELAY_MS, 1500, 0, 60000, 'MESSAGE_DELAY_MS'),
-    contactsFile: path.resolve(root, env.CONTACTS_FILE || 'data/contacts.json'),
-    mediaDir: path.resolve(root, env.MEDIA_DIR || 'media'),
     authDir: path.resolve(root, env.AUTH_DIR || '.wwebjs_auth'),
     executablePath: env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    noSandbox: env.PUPPETEER_NO_SANDBOX === 'true',
   };
 }
 module.exports = { loadConfig };

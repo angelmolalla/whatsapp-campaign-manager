@@ -1,0 +1,10 @@
+# Solo estos archivos forman parte del contexto de construcción.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!scripts/
+!scripts/**
+!src/
+!src/**

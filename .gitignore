@@ -3,6 +3,7 @@
 /.wwebjs_cache/
 /qr.html
 /data/contacts.json
+/contactos.json
 /media/*
 !/media/.gitkeep
 logs

@@ -1,12 +1,10 @@
 const { loadConfig } = require('./config/env');
 const { createContainer } = require('./container');
-const { createApp } = require('./app');
+const { startServer } = require('./server');
 
 const config = loadConfig();
 const { session, campaign } = createContainer(config);
-const server = createApp({ session, campaign, apiKey: config.apiKey }).listen(config.port, config.host, () => {
-  console.log(`API disponible en http://${config.host}:${config.port}`);
-});
+const server = startServer({ config, session, campaign });
 server.on('error', error => { console.error(`No se pudo iniciar la API: ${error.code}`); process.exitCode = 1; });
 let stopping = false;
 async function shutdown() {

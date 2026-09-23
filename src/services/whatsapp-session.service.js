@@ -64,9 +64,18 @@ class WhatsAppSession {
   }
 
   async send(phone, message, media) {
-    const id = await this.client.getNumberId(phone);
-    if (!id) throw new HttpError(422, 'NUMBER_NOT_REGISTERED', 'El número no está registrado en WhatsApp.');
-    return this.client.sendMessage(id._serialized, media || message, media ? { caption: message } : {});
+    let stage = 'resolve_recipient';
+    try {
+      const id = await this.client.getNumberId(phone);
+      if (!id) throw new HttpError(422, 'NUMBER_NOT_REGISTERED', 'El número no está registrado en WhatsApp.');
+      stage = media ? 'send_image' : 'send_text';
+      return await this.client.sendMessage(id._serialized, media || message, media ? { caption: message } : {});
+    } catch (cause) {
+      const error = new Error(cause?.message || String(cause), { cause });
+      error.code = cause?.code;
+      error.sendStage = stage;
+      throw error;
+    }
   }
 
   async close() {
