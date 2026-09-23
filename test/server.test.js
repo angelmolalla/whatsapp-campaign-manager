@@ -51,6 +51,19 @@ test('sin credenciales válidas el arranque permite vincular con QR', async t =>
   assert.match(await response.text(), /data:image\/png;base64,/);
 });
 
+test('fallo de reinicialización invalida sesión y QR y rechaza envíos', async t => {
+  const f = await boot(t, async () => {});
+  f.client.emit('ready');
+  f.client.emit('session_error', new Error('Target closed'));
+  const response = await fetch(`${f.base}/api/session`);
+  const status = await response.json();
+  assert.equal(status.status, 'error');
+  assert.equal(status.qrDataUrl, null);
+  assert.equal(f.errors[0][1].detail, 'Target closed');
+  await assert.rejects(f.session.assertReady(), { code: 'SESSION_NOT_CONNECTED' });
+  assert.equal((await fetch(`${f.base}/api/session/qr`)).status, 409);
+});
+
 test('un fallo de recuperación queda en error sin fingir que está ready', async t => {
   const f = await boot(t, async () => { throw new Error('browser failed'); });
   await f.session.pending;

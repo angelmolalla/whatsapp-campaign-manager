@@ -45,6 +45,14 @@ class WhatsAppSession {
     }
     const client = this.createClient();
     this.client = client;
+    client.on('session_error', error => {
+      this.qr = null;
+      this.state = 'error';
+      this.lastError = 'Se perdió la conexión del navegador con WhatsApp. Inicia nuevamente la sesión.';
+      this.logger.error('[WhatsApp] Falló la reinicialización', {
+        detail: describeSendError(error, [process.env.API_KEY]),
+      });
+    });
     client.on('qr', qr => { this.qr = qr; this.state = 'qr'; });
     client.on('authenticated', () => { this.qr = null; this.state = 'authenticated'; });
     client.on('ready', () => { this.qr = null; this.state = 'ready'; this.lastError = null; });
