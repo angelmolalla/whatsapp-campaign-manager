@@ -1,9 +1,11 @@
 const QRCode = require('qrcode');
 const { HttpError } = require('../errors/http-error');
+const { describeSendError } = require('../utils/send-diagnostics');
 
 class WhatsAppSession {
-  constructor(createClient) {
+  constructor(createClient, logger = console) {
     this.createClient = createClient;
+    this.logger = logger;
     this.client = null;
     this.state = 'disconnected';
     this.qr = null;
@@ -26,10 +28,13 @@ class WhatsAppSession {
     this.state = 'starting';
     this.qr = null;
     this.lastError = null;
-    this.pending = this.initialize().catch(() => {
+    this.pending = this.initialize().catch(error => {
       this.state = 'error';
       this.qr = null;
       this.lastError = 'No se pudo iniciar WhatsApp. Revisa Chrome, la conexión y la carpeta de sesión.';
+      this.logger.error('[WhatsApp] Falló la inicialización', {
+        detail: describeSendError(error, [process.env.API_KEY]),
+      });
     }).finally(() => { this.pending = null; });
   }
 
