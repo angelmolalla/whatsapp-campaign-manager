@@ -1,7 +1,17 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 
+class CompatibleClient extends Client {
+  async destroy() {
+    // Puppeteer 25 removed isConnected(); upstream destroy still checks it.
+    if (this.pupBrowser && typeof this.pupBrowser.isConnected !== 'function' && this.pupBrowser.connected) {
+      await this.pupBrowser.close();
+    }
+    await super.destroy();
+  }
+}
+
 function createWhatsAppClient(config) {
-  return new Client({
+  return new CompatibleClient({
     authStrategy: new LocalAuth({ clientId: 'campaign-manager', dataPath: config.authDir }),
     puppeteer: {
       headless: true,
